@@ -5,33 +5,18 @@ const {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   ChannelType,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  MessageFlags
 } = require("discord.js");
 
-const fs = require("node:fs");
-const path = require("node:path");
-
-const dataFolder = path.join(__dirname, "../data");
-const configPath = path.join(dataFolder, "ticket-config.json");
-
-function loadConfigs() {
-  if (!fs.existsSync(configPath)) {
-    return {};
-  }
-
-  return JSON.parse(fs.readFileSync(configPath, "utf8"));
-}
-
-function saveConfigs(configs) {
-  fs.mkdirSync(dataFolder, { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(configs, null, 2));
-}
+const { loadData, saveData } = require("../utils/dataManager");
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("setup-tickets")
     .setDescription("Set up Tixora's ticket panel.")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+
     .addChannelOption(option =>
       option
         .setName("panel-channel")
@@ -39,6 +24,7 @@ module.exports = {
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
     )
+
     .addRoleOption(option =>
       option
         .setName("staff-role")
@@ -47,93 +33,126 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    await interaction.deferReply({
+      flags: MessageFlags.Ephemeral
+    });
+
     const panelChannel = interaction.options.getChannel("panel-channel");
     const staffRole = interaction.options.getRole("staff-role");
 
-    const botMember = interaction.guild.members.me;
-
-    if (!botMember.permissions.has(PermissionFlagsBits.ManageChannels)) {
-      return interaction.reply({
-        content: "Tixora needs the Manage Channels permission to create tickets.",
-        ephemeral: true
-      });
-    }
-
-    const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle("Tixora Support Center")
-      .setDescription(
-        "Need assistance? We're here to help!\n\n" +
-        "Select a category below to create a private support ticket.\n\n" +
-        "**Available Categories**\n" +
-        "• General Support\n" +
-        "• Technical Support\n" +
-        "• Account Assistance\n" +
-        "• Partnerships\n" +
-        "• Other Inquiries"
-      )
-      .setFooter({ text: "Tixora Support System" })
-      .setTimestamp();
-
-    const menu = new StringSelectMenuBuilder()
-      .setCustomId("tixora_ticket_category")
-      .setPlaceholder("Choose a support category...")
-      .addOptions(
-        {
-          label: "General Support",
-          description: "General questions and assistance.",
-          value: "general"
-        },
-        {
-          label: "Technical Support",
-          description: "Report technical problems.",
-          value: "technical"
-        },
-        {
-          label: "Account Assistance",
-          description: "Get help with account-related issues.",
-          value: "account"
-        },
-        {
-          label: "Partnerships",
-          description: "Discuss partnership inquiries.",
-          value: "partnerships"
-        },
-        {
-          label: "Other Inquiries",
-          description: "Anything that doesn't fit elsewhere.",
-          value: "other"
-        }
-      );
-
-    const row = new ActionRowBuilder().addComponents(menu);
+    let panelMessage;
 
     try {
-      await panelChannel.send({
+      const botMember = interaction.guild.members.me;
+
+      if (!botMember.permissions.has(PermissionFlagsBits.ManageChannels)) {
+        return interaction.editReply({
+          content: "Tixora needs the Manage Channels permission."
+        });
+      }
+
+      const permissions = panelChannel.permissionsFor(botMember);
+
+      if (
+        !permissions ||
+        !permissions.has([
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.EmbedLinks
+        ])
+      ) {
+        return interaction.editReply({
+          content: "Tixora cannot access or send messages in that channel."
+        });
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle("Tixora Support Center")
+        .setDescription(
+          "Need assistance? We're here to help!\n\n" +
+          "Select a category below to create a private support ticket.\n\n" +
+          "**Available Categories**\n" +
+          "• General Support\n" +
+          "• Technical Support\n" +
+          "• Account Assistance\n" +
+          "• Partnerships\n" +
+          "• Other Inquiries"
+        )
+        .setFooter({
+          text: "Tixora Support System"
+        })
+        .setTimestamp();
+
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId("tixora_ticket_category")
+        .setPlaceholder("Choose a support category...")
+        .addOptions(
+          {
+            label: "General Support",
+            description: "General questions and assistance.",
+            value: "general"
+          },
+          {
+            label: "Technical Support",
+            description: "Report technical problems.",
+            value: "technical"
+          },
+          {
+            label: "Account Assistance",
+            description: "Get help with account-related issues.",
+            value: "account"
+          },
+          {
+            label: "Partnerships",
+            description: "Discuss partnership inquiries.",
+            value: "partnerships"
+          },
+          {
+            label: "Other Inquiries",
+            description: "Anything that doesn't fit elsewhere.",
+            value: "other"
+          }
+        );
+
+      const row = new ActionRowBuilder().addComponents(menu);
+
+      panelMessage = await panelChannel.send({
         embeds: [embed],
         components: [row]
       });
 
-      const configs = loadConfigs();
+      const configs = await loadData("config");
 
       configs[interaction.guild.id] = {
+        guildId: interaction.guild.id,
         panelChannelId: panelChannel.id,
-        staffRoleId: staffRole.id
+        panelMessageId: panelMessage.id,
+        staffRoleId: staffRole.id,
+        setupBy: interaction.user.id,
+        setupAt: new Date().toISOString()
       };
 
-      saveConfigs(configs);
+      await saveData("config", configs);
 
-      await interaction.reply({
-        content: `Your ticket panel has been posted in ${panelChannel}!\nStaff role: ${staffRole}`,
-        ephemeral: true
+      await interaction.editReply({
+        content:
+          `Your ticket panel has been posted in ${panelChannel}!\n` +
+          `Staff role: ${staffRole}\n\n` +
+          "Tixora has saved this server's ticket configuration."
       });
 
     } catch (error) {
       console.error("TICKET SETUP ERROR:", error);
 
-      await interaction.reply({
-        content: "Tixora couldn't set up the ticket panel. Check its channel permissions.",
-        ephemeral: true
+      if (panelMessage) {
+        await panelMessage.delete().catch(() => {});
+      }
+
+      await interaction.editReply({
+        content:
+          "Tixora couldn't complete the ticket setup. " +
+          "Please check its permissions and try again."
       }).catch(console.error);
     }
   }

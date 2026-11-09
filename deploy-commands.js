@@ -34,7 +34,7 @@ async function deploy() {
       { body: commands }
     );
 
-    console.log("Tixora commands registered successfully!");
+    console.log("TIXORA COMMAND DEPLOYMENT STARTED");
   } catch (error) {
     console.error(error);
   }

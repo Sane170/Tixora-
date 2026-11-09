@@ -9,7 +9,8 @@ const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  AttachmentBuilder
 } = require("discord.js");
 
 const fs = require("node:fs");
@@ -20,7 +21,11 @@ require("dotenv").config();
 const { loadCommands } = require("./handlers/commandHandler");
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 client.commands = new Collection();
@@ -30,6 +35,67 @@ const configPath = path.join(__dirname, "data", "ticket-config.json");
 function getConfigs() {
   if (!fs.existsSync(configPath)) return {};
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
+}
+
+async function createTranscript(channel) {
+  const messages = [];
+  let before;
+
+  while (true) {
+    const options = { limit: 100 };
+    if (before) options.before = before;
+
+    const batch = await channel.messages.fetch(options);
+
+    if (batch.size === 0) break;
+
+    messages.push(...batch.values());
+
+    before = batch.last().id;
+
+    if (batch.size < 100) break;
+  }
+
+  messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+  const lines = [
+    `TIXORA TICKET TRANSCRIPT`,
+    `Server: ${channel.guild.name}`,
+    `Channel: #${channel.name}`,
+    `Ticket ID: ${channel.id}`,
+    `Created: ${channel.createdAt.toISOString()}`,
+    `Transcript generated: ${new Date().toISOString()}`,
+    "----------------------------------------",
+    ""
+  ];
+
+  for (const message of messages) {
+    const timestamp = message.createdAt.toISOString();
+    const author = `${message.author.tag} (${message.author.id})`;
+
+    lines.push(`[${timestamp}] ${author}`);
+
+    if (message.content) {
+      lines.push(message.content);
+    }
+
+    if (message.embeds.length > 0) {
+      lines.push("[Message contains an embed]");
+    }
+
+    for (const attachment of message.attachments.values()) {
+      lines.push(`[Attachment: ${attachment.name || "File"}]`);
+      lines.push(attachment.url);
+    }
+
+    if (message.stickers.size > 0) {
+      lines.push("[Message contains a sticker]");
+    }
+
+    lines.push("");
+  }
+
+  return Buffer.from(lines.join("\n"), "utf8");
 }
 
 async function startBot() {
@@ -318,7 +384,7 @@ client.on("interactionCreate", async interaction => {
     return;
   }
 
-  // Close ticket button
+  // Close ticket button and save transcript
   if (
     interaction.isButton() &&
     interaction.customId === "tixora_close_ticket"
@@ -336,33 +402,87 @@ client.on("interactionCreate", async interaction => {
       });
     }
 
-    const configs = getConfigs();
-    const config = configs[interaction.guild.id];
-    const staffRole = config
-      ? interaction.guild.roles.cache.get(config.staffRoleId)
-      : null;
+    try {
+      const configs = getConfigs();
+      const config = configs[interaction.guild.id];
+      const staffRole = config
+        ? interaction.guild.roles.cache.get(config.staffRoleId)
+        : null;
 
-    const isOwner = channel.topic.includes(
-      `Ticket owner: ${interaction.user.id}`
-    );
+      const isOwner = channel.topic.includes(
+        `Ticket owner: ${interaction.user.id}`
+      );
 
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    const isStaff = staffRole && member.roles.cache.has(staffRole.id);
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      const isStaff = staffRole && member.roles.cache.has(staffRole.id);
 
-    if (!isOwner && !isStaff) {
-      return interaction.reply({
-        content: "Only the ticket owner or support staff can close this ticket.",
-        ephemeral: true
+      if (!isOwner && !isStaff) {
+        return interaction.reply({
+          content: "Only the ticket owner or support staff can close this ticket.",
+          ephemeral: true
+        });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const logChannel = interaction.guild.channels.cache.find(
+        ch => ch.name === "ticket-logs" && ch.type === ChannelType.GuildText
+      );
+
+      if (!logChannel) {
+        return interaction.editReply(
+          "I couldn't find #ticket-logs. The ticket has been kept open."
+        );
+      }
+
+      const transcriptBuffer = await createTranscript(channel);
+
+      const transcriptFile = new AttachmentBuilder(transcriptBuffer, {
+        name: `tixora-${channel.name}-${channel.id}.txt`
       });
+
+      const transcriptEmbed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle("Ticket Transcript")
+        .setDescription(
+          `A ticket has been closed and its transcript has been saved.\n\n` +
+          `**Ticket:** #${channel.name}\n` +
+          `**Closed by:** ${interaction.user}\n` +
+          `**Ticket ID:** ${channel.id}`
+        )
+        .setTimestamp();
+
+      await logChannel.send({
+        embeds: [transcriptEmbed],
+        files: [transcriptFile]
+      });
+
+      await interaction.editReply(
+        "Transcript saved successfully in #ticket-logs. This ticket will be deleted in 5 seconds."
+      );
+
+      setTimeout(() => {
+        channel.delete("Ticket closed and transcript saved.")
+          .catch(console.error);
+      }, 5000);
+
+    } catch (error) {
+      console.error("TICKET TRANSCRIPT ERROR:", error);
+
+      const errorMessage =
+        "Tixora couldn't save the transcript. The ticket has been kept open.";
+
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(errorMessage).catch(console.error);
+      } else {
+        await interaction.reply({
+          content: errorMessage,
+          ephemeral: true
+        }).catch(console.error);
+      }
     }
 
-    await interaction.reply({
-      content: "This ticket is being closed. This channel will be deleted in 5 seconds."
-    });
-
-    setTimeout(() => {
-      channel.delete("Ticket closed").catch(console.error);
-    }, 5000);
+    return;
   }
 });
 

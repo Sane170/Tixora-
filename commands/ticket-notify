@@ -1,0 +1,83 @@
+const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const configPath = path.join(__dirname, "../data/ticket-config.json");
+
+function loadConfigs() {
+  if (!fs.existsSync(configPath)) return {};
+  return JSON.parse(fs.readFileSync(configPath, "utf8"));
+}
+
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName("ticket-notify")
+    .setDescription("Notify the ticket owner that staff need a response.")
+    .addStringOption(option =>
+      option
+        .setName("message")
+        .setDescription("What should the ticket owner know?")
+        .setRequired(true)
+        .setMaxLength(500)
+    ),
+
+  async execute(interaction) {
+    const channel = interaction.channel;
+    const config = loadConfigs()[interaction.guild.id];
+
+    if (!config) {
+      return interaction.reply({
+        content: "Tixora has not been set up in this server.",
+        ephemeral: true
+      });
+    }
+
+    if (!channel.topic?.includes("Ticket owner:")) {
+      return interaction.reply({
+        content: "This command can only be used inside a ticket.",
+        ephemeral: true
+      });
+    }
+
+    if (!interaction.member.roles.cache.has(config.staffRoleId)) {
+      return interaction.reply({
+        content: "Only ticket staff can notify ticket owners.",
+        ephemeral: true
+      });
+    }
+
+    const ownerId = channel.topic.match(/Ticket owner: (\d+)/)?.[1];
+
+    if (!ownerId) {
+      return interaction.reply({
+        content: "I couldn't find this ticket's owner.",
+        ephemeral: true
+      });
+    }
+
+    const message = interaction.options.getString("message");
+
+    const embed = new EmbedBuilder()
+      .setColor(0x5865F2)
+      .setTitle("Support Team Notification")
+      .setDescription(message)
+      .setFooter({ text: "Tixora Support System" })
+      .setTimestamp();
+
+    try {
+      await interaction.reply({
+        content: `<@${ownerId}>`,
+        embeds: [embed],
+        allowedMentions: { users: [ownerId] }
+      });
+    } catch (error) {
+      console.error("TICKET NOTIFY ERROR:", error);
+
+      return interaction.reply({
+        content: "I couldn't send the notification.",
+        ephemeral: true
+      });
+    }
+  }
+};

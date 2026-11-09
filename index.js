@@ -1,62 +1,44 @@
 
-const {
-  Client,
-  GatewayIntentBits,
-  Collection,
-  ActivityType
-} = require("discord.js");
+const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 
-require("dotenv").config();
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Check Tixora's response speed."),
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds
-  ]
-});
+  async execute(interaction, client) {
+    try {
+      await interaction.deferReply();
 
-client.commands = new Collection();
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle("Tixora Status")
+        .setDescription("Tixora is online and responding!")
+        .addFields(
+          {
+            name: "WebSocket Latency",
+            value: `${client.ws.ping}ms`,
+            inline: true
+          },
+          {
+            name: "Status",
+            value: "Online",
+            inline: true
+          }
+        )
+        .setFooter({ text: "Tixora Support System" })
+        .setTimestamp();
 
-client.once("ready", () => {
-  console.log("TIXORA STARTING...");
-  console.log("--------------------------------");
-  console.log(`Tixora is online as ${client.user.tag}`);
-  console.log(`Serving ${client.guilds.cache.size} servers`);
-  console.log("--------------------------------");
+      await interaction.editReply({ embeds: [embed] });
 
-  client.user.setPresence({
-    activities: [
-      {
-        name: "Support made simple | /help",
-        type: ActivityType.Watching
+    } catch (error) {
+      console.error("PING COMMAND ERROR:", error);
+
+      if (interaction.deferred) {
+        await interaction.editReply({
+          content: "Tixora encountered an error while running this command."
+        }).catch(console.error);
       }
-    ],
-    status: "online"
-  });
-});
-
-client.on("interactionCreate", async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-
-  const command = client.commands.get(interaction.commandName);
-
-  if (!command) return;
-
-  try {
-    await command.execute(interaction, client);
-  } catch (error) {
-    console.error(error);
-
-    const response = {
-      content: "Something went wrong while running this command.",
-      ephemeral: true
-    };
-
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(response);
-    } else {
-      await interaction.reply(response);
     }
   }
-});
-
-client.login(process.env.DISCORD_TOKEN);
+};

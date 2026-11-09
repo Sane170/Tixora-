@@ -17,6 +17,7 @@ const client = new Client({
 client.commands = new Collection();
 
 client.once("ready", () => {
+  console.log("TIXORA STARTING...");
   console.log("--------------------------------");
   console.log(`Tixora is online as ${client.user.tag}`);
   console.log(`Serving ${client.guilds.cache.size} servers`);

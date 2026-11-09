@@ -65,7 +65,10 @@ async function createTranscript(channel) {
   ];
 
   for (const message of messages) {
-    lines.push(`[${message.createdAt.toISOString()}] ${message.author.tag} (${message.author.id})`);
+    lines.push(
+      `[${message.createdAt.toISOString()}] ${message.author.tag} (${message.author.id})`
+    );
+
     if (message.content) lines.push(message.content);
     if (message.embeds.length) lines.push("[Message contains an embed]");
 
@@ -74,7 +77,10 @@ async function createTranscript(channel) {
       lines.push(attachment.url);
     }
 
-    if (message.stickers.size) lines.push("[Message contains a sticker]");
+    if (message.stickers.size) {
+      lines.push("[Message contains a sticker]");
+    }
+
     lines.push("");
   }
 
@@ -114,6 +120,7 @@ function ticketButtons({ claimed = false, closed = false } = {}) {
   return new ActionRowBuilder().addComponents(claimButton, closeButton);
 }
 
+// Start bot
 async function startBot() {
   try {
     await loadCommands(client);
@@ -124,6 +131,7 @@ async function startBot() {
   }
 }
 
+// Bot ready
 client.once("ready", () => {
   console.log("--------------------------------");
   console.log(`Tixora is online as ${client.user.tag}`);
@@ -131,12 +139,18 @@ client.once("ready", () => {
   console.log("--------------------------------");
 
   client.user.setPresence({
-    activities: [{ name: "support tickets", type: ActivityType.Watching }],
+    activities: [
+      {
+        name: "support tickets",
+        type: ActivityType.Watching
+      }
+    ],
     status: "online"
   });
 });
 
 client.on("interactionCreate", async interaction => {
+
   // Slash commands
   if (interaction.isChatInputCommand()) {
     const command = client.commands.get(interaction.commandName);
@@ -164,6 +178,7 @@ client.on("interactionCreate", async interaction => {
         await interaction.reply(response).catch(console.error);
       }
     }
+
     return;
   }
 
@@ -187,7 +202,9 @@ client.on("interactionCreate", async interaction => {
       const staffRole = interaction.guild.roles.cache.get(config.staffRoleId);
 
       if (!staffRole) {
-        return interaction.editReply("The configured staff role no longer exists.");
+        return interaction.editReply(
+          "The configured staff role no longer exists."
+        );
       }
 
       const existingTicket = interaction.guild.channels.cache.find(channel =>
@@ -196,7 +213,9 @@ client.on("interactionCreate", async interaction => {
       );
 
       if (existingTicket) {
-        return interaction.editReply(`You already have a ticket: ${existingTicket}`);
+        return interaction.editReply(
+          `You already have a ticket: ${existingTicket}`
+        );
       }
 
       const categories = {
@@ -218,8 +237,11 @@ client.on("interactionCreate", async interaction => {
           .toLowerCase()
           .replace(/[^a-z0-9-]/g, "-")
           .slice(0, 90),
+
         type: ChannelType.GuildText,
+
         topic: `Ticket owner: ${interaction.user.id} | Category: ${categoryName} | Original category: none`,
+
         permissionOverwrites: [
           {
             id: interaction.guild.roles.everyone.id,
@@ -262,7 +284,9 @@ client.on("interactionCreate", async interaction => {
           `**Staff Team:** ${staffRole}\n\n` +
           "Please describe your issue. A staff member will assist you soon."
         )
-        .setFooter({ text: "Tixora Support System" })
+        .setFooter({
+          text: "Tixora Support System"
+        })
         .setTimestamp();
 
       await ticketChannel.send({
@@ -271,9 +295,13 @@ client.on("interactionCreate", async interaction => {
         components: [ticketButtons()]
       });
 
-      await interaction.editReply(`Your ticket has been created: ${ticketChannel}`);
+      await interaction.editReply(
+        `Your ticket has been created: ${ticketChannel}`
+      );
+
     } catch (error) {
       console.error("TICKET CREATION ERROR:", error);
+
       await interaction.editReply(
         "Tixora couldn't create your ticket. Please check its server permissions."
       ).catch(console.error);
@@ -298,6 +326,7 @@ client.on("interactionCreate", async interaction => {
       }
 
       const config = getConfigs()[interaction.guild.id];
+
       const staffRole = config
         ? interaction.guild.roles.cache.get(config.staffRoleId)
         : null;
@@ -309,7 +338,9 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      const member = await interaction.guild.members.fetch(interaction.user.id);
+      const member = await interaction.guild.members.fetch(
+        interaction.user.id
+      );
 
       if (!member.roles.cache.has(staffRole.id)) {
         return interaction.reply({
@@ -336,6 +367,7 @@ client.on("interactionCreate", async interaction => {
       await channel.send(
         `📌 This ticket has been claimed by ${interaction.user}.`
       );
+
     } catch (error) {
       console.error("TICKET CLAIM ERROR:", error);
 
@@ -366,6 +398,7 @@ client.on("interactionCreate", async interaction => {
       }
 
       const config = getConfigs()[interaction.guild.id];
+
       const staffRole = config
         ? interaction.guild.roles.cache.get(config.staffRoleId)
         : null;
@@ -377,7 +410,9 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      const member = await interaction.guild.members.fetch(interaction.user.id);
+      const member = await interaction.guild.members.fetch(
+        interaction.user.id
+      );
 
       if (!member.roles.cache.has(staffRole.id)) {
         return interaction.reply({
@@ -395,8 +430,6 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      const previousClaimant = claimedMatch[1];
-
       const updatedTopic = channel.topic
         .replace(/\s*\|\s*Claimed by: \d+/g, "")
         .trim();
@@ -410,6 +443,7 @@ client.on("interactionCreate", async interaction => {
       await channel.send(
         `↩️ This ticket has been unclaimed by ${interaction.user}. It is now available for another staff member.`
       );
+
     } catch (error) {
       console.error("TICKET UNCLAIM ERROR:", error);
 
@@ -424,7 +458,7 @@ client.on("interactionCreate", async interaction => {
     return;
   }
 
-  // Close ticket: create transcript, archive channel, and show Reopen button
+  // Start ticket close confirmation
   if (
     interaction.isButton() &&
     interaction.customId === "tixora_close_ticket"
@@ -440,16 +474,23 @@ client.on("interactionCreate", async interaction => {
 
     try {
       const config = getConfigs()[interaction.guild.id];
+
       const staffRole = config
         ? interaction.guild.roles.cache.get(config.staffRoleId)
         : null;
 
       const ownerMatch = channel.topic.match(/Ticket owner: (\d+)/);
       const ownerId = ownerMatch ? ownerMatch[1] : null;
+
       const isOwner = ownerId === interaction.user.id;
 
-      const member = await interaction.guild.members.fetch(interaction.user.id);
-      const isStaff = staffRole && member.roles.cache.has(staffRole.id);
+      const member = await interaction.guild.members.fetch(
+        interaction.user.id
+      );
+
+      const isStaff = Boolean(
+        staffRole && member.roles.cache.has(staffRole.id)
+      );
 
       if (!isOwner && !isStaff) {
         return interaction.reply({
@@ -458,33 +499,143 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      await interaction.deferReply({ ephemeral: true });
+      const confirmationRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `tixora_confirm_close:${interaction.message.id}`
+          )
+          .setLabel("Confirm Close")
+          .setEmoji("🔒")
+          .setStyle(ButtonStyle.Danger),
+
+        new ButtonBuilder()
+          .setCustomId(
+            `tixora_cancel_close:${interaction.message.id}`
+          )
+          .setLabel("Cancel")
+          .setEmoji("↩️")
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      await interaction.reply({
+        content: "Are you sure you want to close this ticket? A transcript will be saved and the ticket will be archived.",
+        components: [confirmationRow],
+        ephemeral: true
+      });
+
+    } catch (error) {
+      console.error("CLOSE CONFIRMATION ERROR:", error);
+
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: "Tixora couldn't start the close confirmation.",
+          ephemeral: true
+        }).catch(console.error);
+      }
+    }
+
+    return;
+  }
+
+  // Cancel ticket closure
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("tixora_cancel_close:")
+  ) {
+    return interaction.update({
+      content: "Ticket closure cancelled. Your ticket is still open.",
+      components: []
+    });
+  }
+
+  // Confirm ticket closure
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith("tixora_confirm_close:")
+  ) {
+    const channel = interaction.channel;
+
+    if (!channel?.topic?.includes("Ticket owner:")) {
+      return interaction.update({
+        content: "This is no longer a valid Tixora ticket.",
+        components: []
+      });
+    }
+
+    try {
+      const config = getConfigs()[interaction.guild.id];
+
+      const staffRole = config
+        ? interaction.guild.roles.cache.get(config.staffRoleId)
+        : null;
+
+      const ownerMatch = channel.topic.match(/Ticket owner: (\d+)/);
+      const ownerId = ownerMatch ? ownerMatch[1] : null;
+
+      const isOwner = ownerId === interaction.user.id;
+
+      const member = await interaction.guild.members.fetch(
+        interaction.user.id
+      );
+
+      const isStaff = Boolean(
+        staffRole && member.roles.cache.has(staffRole.id)
+      );
+
+      if (!ownerId || (!isOwner && !isStaff)) {
+        return interaction.update({
+          content: "Only the ticket owner or support staff can confirm closing this ticket.",
+          components: []
+        });
+      }
+
+      const originalMessageId = interaction.customId.split(":")[1];
+
+      if (!originalMessageId) {
+        return interaction.update({
+          content: "I couldn't find the original ticket controls. The ticket has been kept open.",
+          components: []
+        });
+      }
 
       const logChannel = interaction.guild.channels.cache.find(ch =>
-        ch.name === "ticket-logs" && ch.type === ChannelType.GuildText
+        ch.name === "ticket-logs" &&
+        ch.type === ChannelType.GuildText
       );
 
       if (!logChannel) {
-        return interaction.editReply(
-          "I couldn't find #ticket-logs. The ticket has been kept open."
-        );
+        return interaction.update({
+          content: "I couldn't find #ticket-logs. The ticket has been kept open.",
+          components: []
+        });
       }
 
       const closedCategory = interaction.guild.channels.cache.find(ch =>
-        ch.name === "Closed Tickets" && ch.type === ChannelType.GuildCategory
+        ch.name === "Closed Tickets" &&
+        ch.type === ChannelType.GuildCategory
       );
 
       if (!closedCategory) {
-        return interaction.editReply(
-          "I couldn't find the Closed Tickets category. The ticket has been kept open."
-        );
+        return interaction.update({
+          content: "I couldn't find the Closed Tickets category. The ticket has been kept open.",
+          components: []
+        });
       }
+
+      await interaction.deferUpdate();
+
+      const originalMessage = await channel.messages.fetch(
+        originalMessageId
+      );
 
       const transcriptBuffer = await createTranscript(channel);
 
-      const transcriptFile = new AttachmentBuilder(transcriptBuffer, {
-        name: `tixora-${channel.name}-${channel.id}.txt`
-      });
+      const transcriptFile = new AttachmentBuilder(
+        transcriptBuffer,
+        {
+          name: `tixora-${channel.name}-${channel.id}.txt`
+        }
+      );
 
       const transcriptEmbed = new EmbedBuilder()
         .setColor(0x5865F2)
@@ -502,17 +653,15 @@ client.on("interactionCreate", async interaction => {
         files: [transcriptFile]
       });
 
-      if (ownerId) {
-        await channel.permissionOverwrites.edit(ownerId, {
-          ViewChannel: true,
-          SendMessages: false,
-          ReadMessageHistory: true
-        });
-      }
+      await channel.permissionOverwrites.edit(ownerId, {
+        ViewChannel: true,
+        SendMessages: false,
+        ReadMessageHistory: true
+      });
 
       await channel.setParent(closedCategory.id);
 
-      await interaction.message.edit({
+      await originalMessage.edit({
         components: [ticketButtons({ closed: true })]
       });
 
@@ -520,9 +669,11 @@ client.on("interactionCreate", async interaction => {
         `🔒 This ticket has been closed by ${interaction.user} and moved to **Closed Tickets**. Staff can reopen it when needed.`
       );
 
-      await interaction.editReply(
-        "Transcript saved and ticket archived in Closed Tickets. Staff can reopen it using the button in the ticket."
-      );
+      await interaction.editReply({
+        content: "Ticket successfully closed! The transcript has been saved.",
+        components: []
+      });
+
     } catch (error) {
       console.error("TICKET CLOSE/ARCHIVE ERROR:", error);
 
@@ -530,7 +681,10 @@ client.on("interactionCreate", async interaction => {
         "Tixora couldn't finish archiving this ticket. Please check its permissions and try again.";
 
       if (interaction.deferred || interaction.replied) {
-        await interaction.editReply(message).catch(console.error);
+        await interaction.editReply({
+          content: message,
+          components: []
+        }).catch(console.error);
       } else {
         await interaction.reply({
           content: message,
@@ -558,6 +712,7 @@ client.on("interactionCreate", async interaction => {
       }
 
       const config = getConfigs()[interaction.guild.id];
+
       const staffRole = config
         ? interaction.guild.roles.cache.get(config.staffRoleId)
         : null;
@@ -569,7 +724,9 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      const member = await interaction.guild.members.fetch(interaction.user.id);
+      const member = await interaction.guild.members.fetch(
+        interaction.user.id
+      );
 
       if (!member.roles.cache.has(staffRole.id)) {
         return interaction.reply({
@@ -610,7 +767,10 @@ client.on("interactionCreate", async interaction => {
         `🔓 This ticket has been reopened by ${interaction.user}. <@${ownerId}> can reply again.`
       );
 
-      await interaction.editReply("Ticket reopened successfully.");
+      await interaction.editReply(
+        "Ticket reopened successfully."
+      );
+
     } catch (error) {
       console.error("TICKET REOPEN ERROR:", error);
 

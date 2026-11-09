@@ -5,11 +5,16 @@ const path = require("node:path");
 async function loadCommands(client) {
   const commandsPath = path.join(__dirname, "../commands");
 
+  if (!fs.existsSync(commandsPath)) {
+    throw new Error("The commands folder could not be found.");
+  }
+
   const commandFiles = fs.readdirSync(commandsPath)
     .filter(file => file.endsWith(".js"));
 
   for (const file of commandFiles) {
-    const command = require(path.join(commandsPath, file));
+    const filePath = path.join(commandsPath, file);
+    const command = require(filePath);
 
     if (!command.data || !command.execute) {
       console.log(`Skipped invalid command: ${file}`);
@@ -21,7 +26,7 @@ async function loadCommands(client) {
     console.log(`Loaded command: ${command.data.name}`);
   }
 
-  console.log(`Loaded ${client.commands.size} commands.`);
+  console.log(`Successfully loaded ${client.commands.size} commands.`);
 }
 
 module.exports = { loadCommands };

@@ -1,0 +1,15 @@
+
+{
+  "name": "tixora",
+  "version": "1.0.0",
+  "description": "A public Discord ticket support bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.4.7"
+  }
+}

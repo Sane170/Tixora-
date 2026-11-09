@@ -1,44 +1,85 @@
 
-const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  Collection,
+  ActivityType
+} = require("discord.js");
 
-module.exports = {
-  data: new SlashCommandBuilder()
-    .setName("ping")
-    .setDescription("Check Tixora's response speed."),
+require("dotenv").config();
 
-  async execute(interaction, client) {
-    try {
-      await interaction.deferReply();
+const { loadCommands } = require("./handlers/commandHandler");
 
-      const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle("Tixora Status")
-        .setDescription("Tixora is online and responding!")
-        .addFields(
-          {
-            name: "WebSocket Latency",
-            value: `${client.ws.ping}ms`,
-            inline: true
-          },
-          {
-            name: "Status",
-            value: "Online",
-            inline: true
-          }
-        )
-        .setFooter({ text: "Tixora Support System" })
-        .setTimestamp();
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds
+  ]
+});
 
-      await interaction.editReply({ embeds: [embed] });
+client.commands = new Collection();
 
-    } catch (error) {
-      console.error("PING COMMAND ERROR:", error);
+// Load commands when Tixora starts
+async function startBot() {
+  try {
+    await loadCommands(client);
 
-      if (interaction.deferred) {
-        await interaction.editReply({
-          content: "Tixora encountered an error while running this command."
-        }).catch(console.error);
+    await client.login(process.env.DISCORD_TOKEN);
+  } catch (error) {
+    console.error("TIXORA STARTUP ERROR:", error);
+    process.exit(1);
+  }
+}
+
+// Bot is ready
+client.once("ready", () => {
+  console.log("--------------------------------");
+  console.log(`Tixora is online as ${client.user.tag}`);
+  console.log(`Serving ${client.guilds.cache.size} servers`);
+  console.log("--------------------------------");
+
+  client.user.setPresence({
+    activities: [
+      {
+        name: "support tickets",
+        type: ActivityType.Watching
       }
+    ],
+    status: "online"
+  });
+});
+
+// Handle slash commands
+client.on("interactionCreate", async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  const command = client.commands.get(interaction.commandName);
+
+  if (!command) {
+    return interaction.reply({
+      content: "That command could not be found.",
+      ephemeral: true
+    });
+  }
+
+  try {
+    await command.execute(interaction, client);
+  } catch (error) {
+    console.error(
+      `COMMAND ERROR (${interaction.commandName}):`,
+      error
+    );
+
+    const response = {
+      content: "Tixora encountered an error while running that command.",
+      ephemeral: true
+    };
+
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp(response).catch(console.error);
+    } else {
+      await interaction.reply(response).catch(console.error);
     }
   }
-};
+});
+
+startBot();

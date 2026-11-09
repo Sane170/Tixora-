@@ -32,7 +32,6 @@ function getConfigs() {
   return JSON.parse(fs.readFileSync(configPath, "utf8"));
 }
 
-// Load commands and start Tixora
 async function startBot() {
   try {
     await loadCommands(client);
@@ -43,7 +42,6 @@ async function startBot() {
   }
 }
 
-// Bot ready
 client.once("ready", () => {
   console.log("--------------------------------");
   console.log(`Tixora is online as ${client.user.tag}`);
@@ -51,17 +49,14 @@ client.once("ready", () => {
   console.log("--------------------------------");
 
   client.user.setPresence({
-    activities: [
-      {
-        name: "support tickets",
-        type: ActivityType.Watching
-      }
-    ],
+    activities: [{
+      name: "support tickets",
+      type: ActivityType.Watching
+    }],
     status: "online"
   });
 });
 
-// Handle commands and ticket interactions
 client.on("interactionCreate", async interaction => {
 
   // Slash commands
@@ -108,7 +103,7 @@ client.on("interactionCreate", async interaction => {
 
       if (!config) {
         return interaction.editReply(
-          "Tixora hasn't been configured in this server yet. Ask an administrator to run /setup-tickets."
+          "Tixora hasn't been configured. Ask an administrator to run /setup-tickets."
         );
       }
 
@@ -116,7 +111,7 @@ client.on("interactionCreate", async interaction => {
 
       if (!staffRole) {
         return interaction.editReply(
-          "The configured staff role no longer exists. Please run /setup-tickets again."
+          "The configured staff role no longer exists."
         );
       }
 
@@ -139,8 +134,7 @@ client.on("interactionCreate", async interaction => {
         other: "Other Inquiries"
       };
 
-      const selected = interaction.values[0];
-      const categoryName = categories[selected];
+      const categoryName = categories[interaction.values[0]];
 
       if (!categoryName) {
         return interaction.editReply("That ticket category is invalid.");
@@ -198,12 +192,22 @@ client.on("interactionCreate", async interaction => {
         .setFooter({ text: "Tixora Support System" })
         .setTimestamp();
 
+      const claimButton = new ButtonBuilder()
+        .setCustomId("tixora_claim_ticket")
+        .setLabel("Claim Ticket")
+        .setEmoji("📌")
+        .setStyle(ButtonStyle.Primary);
+
       const closeButton = new ButtonBuilder()
         .setCustomId("tixora_close_ticket")
         .setLabel("Close Ticket")
+        .setEmoji("🔒")
         .setStyle(ButtonStyle.Danger);
 
-      const row = new ActionRowBuilder().addComponents(closeButton);
+      const row = new ActionRowBuilder().addComponents(
+        claimButton,
+        closeButton
+      );
 
       await ticketChannel.send({
         content: `${interaction.user} ${staffRole}`,
@@ -221,6 +225,94 @@ client.on("interactionCreate", async interaction => {
       await interaction.editReply(
         "Tixora couldn't create your ticket. Please check its server permissions."
       ).catch(console.error);
+    }
+
+    return;
+  }
+
+  // Claim ticket button
+  if (
+    interaction.isButton() &&
+    interaction.customId === "tixora_claim_ticket"
+  ) {
+    try {
+      const channel = interaction.channel;
+
+      if (!channel?.topic?.includes("Ticket owner:")) {
+        return interaction.reply({
+          content: "This is not a valid Tixora ticket.",
+          ephemeral: true
+        });
+      }
+
+      const configs = getConfigs();
+      const config = configs[interaction.guild.id];
+      const staffRole = config
+        ? interaction.guild.roles.cache.get(config.staffRoleId)
+        : null;
+
+      if (!staffRole) {
+        return interaction.reply({
+          content: "The configured staff role could not be found.",
+          ephemeral: true
+        });
+      }
+
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+
+      if (!member.roles.cache.has(staffRole.id)) {
+        return interaction.reply({
+          content: "Only support staff can claim tickets.",
+          ephemeral: true
+        });
+      }
+
+      if (channel.topic.includes("Claimed by:")) {
+        return interaction.reply({
+          content: "This ticket has already been claimed.",
+          ephemeral: true
+        });
+      }
+
+      await channel.setTopic(
+        `${channel.topic} | Claimed by: ${interaction.user.id}`
+      );
+
+      const claimedButton = new ButtonBuilder()
+        .setCustomId("tixora_claimed")
+        .setLabel(`Claimed by ${interaction.user.username}`.slice(0, 80))
+        .setEmoji("✅")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(true);
+
+      const closeButton = new ButtonBuilder()
+        .setCustomId("tixora_close_ticket")
+        .setLabel("Close Ticket")
+        .setEmoji("🔒")
+        .setStyle(ButtonStyle.Danger);
+
+      const row = new ActionRowBuilder().addComponents(
+        claimedButton,
+        closeButton
+      );
+
+      await interaction.update({
+        components: [row]
+      });
+
+      await channel.send(
+        `📌 This ticket has been claimed by ${interaction.user}.`
+      );
+
+    } catch (error) {
+      console.error("TICKET CLAIM ERROR:", error);
+
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: "Tixora couldn't claim this ticket.",
+          ephemeral: true
+        }).catch(console.error);
+      }
     }
 
     return;
@@ -254,8 +346,8 @@ client.on("interactionCreate", async interaction => {
       `Ticket owner: ${interaction.user.id}`
     );
 
-    const isStaff = staffRole &&
-      interaction.member.roles.cache.has(staffRole.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const isStaff = staffRole && member.roles.cache.has(staffRole.id);
 
     if (!isOwner && !isStaff) {
       return interaction.reply({

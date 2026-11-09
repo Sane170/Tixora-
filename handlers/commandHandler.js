@@ -9,12 +9,16 @@ async function loadCommands(client) {
     .filter(file => file.endsWith(".js"));
 
   for (const file of commandFiles) {
-    const filePath = path.join(commandsPath, file);
-    const command = require(filePath);
+    const command = require(path.join(commandsPath, file));
 
-    client.commands.set(command.name, command);
+    if (!command.data || !command.execute) {
+      console.log(`Skipped invalid command: ${file}`);
+      continue;
+    }
 
-    console.log(`Loaded command: ${command.name}`);
+    client.commands.set(command.data.name, command);
+
+    console.log(`Loaded command: ${command.data.name}`);
   }
 
   console.log(`Loaded ${client.commands.size} commands.`);

@@ -1,35 +1,31 @@
 
+const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
+
 module.exports = {
-  name: "ping",
-  description: "Check Tixora's response speed.",
+  data: new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Check Tixora's response speed."),
 
   async execute(interaction, client) {
-    const latency = client.ws.ping;
-
-    await interaction.reply({
-      embeds: [
+    const embed = new EmbedBuilder()
+      .setColor(0x5865F2)
+      .setTitle("Tixora Status")
+      .setDescription("Tixora is online and responding!")
+      .addFields(
         {
-          color: 0x5865F2,
-          title: "Tixora Status",
-          description: "Tixora is online and responding!",
-          fields: [
-            {
-              name: "WebSocket Latency",
-              value: `${latency}ms`,
-              inline: true
-            },
-            {
-              name: "Status",
-              value: "Online",
-              inline: true
-            }
-          ],
-          footer: {
-            text: "Tixora Support System"
-          },
-          timestamp: new Date().toISOString()
+          name: "WebSocket Latency",
+          value: `${client.ws.ping}ms`,
+          inline: true
+        },
+        {
+          name: "Status",
+          value: "Online",
+          inline: true
         }
-      ]
-    });
+      )
+      .setFooter({ text: "Tixora Support System" })
+      .setTimestamp();
+
+    await interaction.reply({ embeds: [embed] });
   }
 };

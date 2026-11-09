@@ -1,0 +1,133 @@
+const {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  AttachmentBuilder
+} = require("discord.js");
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const configPath = path.join(__dirname, "../data/ticket-config.json");
+
+function loadConfigs() {
+  if (!fs.existsSync(configPath)) return {};
+  return JSON.parse(fs.readFileSync(configPath, "utf8"));
+}
+
+async function createTranscript(channel) {
+  let messages = [];
+  let lastId;
+
+  while (true) {
+    const batch = await channel.messages.fetch({
+      limit: 100,
+      ...(lastId ? { before: lastId } : {})
+    });
+
+    if (batch.size === 0) break;
+
+    messages.push(...batch.values());
+    lastId = batch.last().id;
+
+    if (batch.size < 100) break;
+  }
+
+  messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+  const lines = messages.map(message => {
+    const time = new Date(message.createdTimestamp).toLocaleString();
+    const content = message.content || "[No text content]";
+    const attachments = [...message.attachments.values()]
+      .map(file => file.url)
+      .join("\n");
+
+    return [
+      `[${time}] ${message.author.tag}:`,
+      content,
+      attachments ? `Attachments:\n${attachments}` : ""
+    ].filter(Boolean).join("\n");
+  });
+
+  return Buffer.from(
+    `Tixora Ticket Transcript\nChannel: ${channel.name}\n\n${lines.join("\n\n")}`,
+    "utf8"
+  );
+}
+
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName("ticket-transcript")
+    .setDescription("Generate a transcript of the current ticket."),
+
+  async execute(interaction) {
+    const channel = interaction.channel;
+    const config = loadConfigs()[interaction.guild.id];
+
+    if (!config) {
+      return interaction.reply({
+        content: "Tixora has not been set up in this server.",
+        ephemeral: true
+      });
+    }
+
+    if (!channel.topic?.includes("Ticket owner:")) {
+      return interaction.reply({
+        content: "This command can only be used inside a ticket.",
+        ephemeral: true
+      });
+    }
+
+    if (!interaction.member.roles.cache.has(config.staffRoleId)) {
+      return interaction.reply({
+        content: "Only ticket staff can generate transcripts.",
+        ephemeral: true
+      });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      const logsChannel = interaction.guild.channels.cache.find(
+        ch => ch.name === "ticket-logs"
+      );
+
+      if (!logsChannel || !logsChannel.isTextBased()) {
+        return interaction.editReply(
+          "I couldn't find a text channel named #ticket-logs."
+        );
+      }
+
+      const transcript = await createTranscript(channel);
+
+      const attachment = new AttachmentBuilder(transcript, {
+        name: `${channel.name}-transcript.txt`
+      });
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle("Ticket Transcript")
+        .setDescription(`A transcript was requested for ${channel}.`)
+        .addFields({
+          name: "Requested By",
+          value: `${interaction.user}`,
+          inline: true
+        })
+        .setTimestamp();
+
+      await logsChannel.send({
+        embeds: [embed],
+        files: [attachment]
+      });
+
+      await interaction.editReply(
+        "The transcript has been generated and sent to #ticket-logs."
+      );
+    } catch (error) {
+      console.error("TRANSCRIPT COMMAND ERROR:", error);
+
+      await interaction.editReply(
+        "I couldn't generate the transcript. Check Tixora's channel permissions."
+      );
+    }
+  }
+};

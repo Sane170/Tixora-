@@ -546,6 +546,7 @@ client.on("interactionCreate", async interaction => {
     interaction.isButton() &&
     interaction.customId === "tixora_close_ticket"
   ) {
+    console.log("CLOSE BUTTON HANDLER REACHED");
     const channel = interaction.channel;
 
     if (!channel?.topic?.includes("Ticket owner:")) {

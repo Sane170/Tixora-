@@ -1,3 +1,4 @@
+
 const {
   Client,
   GatewayIntentBits,
@@ -15,11 +16,10 @@ const {
   TextInputStyle
 } = require("discord.js");
 
-const fs = require("node:fs");
-const path = require("node:path");
 require("dotenv").config();
 
 const { loadCommands } = require("./handlers/commandHandler");
+const { loadData, saveData } = require("./utils/dataManager");
 
 const client = new Client({
   intents: [
@@ -31,11 +31,59 @@ const client = new Client({
 
 client.commands = new Collection();
 
-const configPath = path.join(__dirname, "data", "ticket-config.json");
+// Serialize storage updates so simultaneous ticket actions
+// don't overwrite each other's changes.
+let storageQueue = Promise.resolve();
 
-function getConfigs() {
-  if (!fs.existsSync(configPath)) return {};
-  return JSON.parse(fs.readFileSync(configPath, "utf8"));
+async function updateData(name, updater) {
+  const operation = storageQueue.then(async () => {
+    const data = await loadData(name);
+    const result = await updater(data);
+    await saveData(name, data);
+    return result;
+  });
+
+  storageQueue = operation.catch(() => {});
+  return operation;
+}
+
+async function getGuildConfig(guildId) {
+  const configs = await loadData("config");
+  return configs[guildId] || null;
+}
+
+async function getTicket(guildId, channelId) {
+  const tickets = await loadData("tickets");
+  return tickets[guildId]?.[channelId] || null;
+}
+
+async function updateTicket(guildId, channelId, changes) {
+  return updateData("tickets", data => {
+    if (!data[guildId]) data[guildId] = {};
+    if (!data[guildId][channelId]) return null;
+
+    Object.assign(data[guildId][channelId], changes);
+    data[guildId][channelId].updatedAt = new Date().toISOString();
+
+    return data[guildId][channelId];
+  });
+}
+
+async function allocateTicketNumber(guildId) {
+  return updateData("counters", counters => {
+    const current = Number(counters[guildId]) || 0;
+    const next = current + 1;
+    counters[guildId] = next;
+    return next;
+  });
+}
+
+async function saveNewTicket(guildId, channelId, ticketData) {
+  return updateData("tickets", tickets => {
+    if (!tickets[guildId]) tickets[guildId] = {};
+    tickets[guildId][channelId] = ticketData;
+    return ticketData;
+  });
 }
 
 async function createTranscript(channel) {
@@ -51,17 +99,21 @@ async function createTranscript(channel) {
 
     messages.push(...batch.values());
     before = batch.last().id;
+
     if (batch.size < 100) break;
   }
 
   messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
+  const ticket = await getTicket(channel.guild.id, channel.id);
+
   const lines = [
     "TIXORA TICKET TRANSCRIPT",
     `Server: ${channel.guild.name}`,
     `Channel: #${channel.name}`,
+    `Ticket Number: ${ticket?.ticketNumber ?? "Unknown"}`,
     `Ticket ID: ${channel.id}`,
-    `Close reason: ${(channel.topic || "").match(/Close reason: (.*?)(?: \| |$)/)?.[1] || "Not provided"}`,
+    `Close reason: ${ticket?.closeReason || "Not provided"}`,
     `Created: ${channel.createdAt.toISOString()}`,
     `Transcript generated: ${new Date().toISOString()}`,
     "----------------------------------------",
@@ -69,7 +121,10 @@ async function createTranscript(channel) {
   ];
 
   for (const message of messages) {
-    lines.push(`[${message.createdAt.toISOString()}] ${message.author.tag} (${message.author.id})`);
+    lines.push(
+      `[${message.createdAt.toISOString()}] ${message.author.tag} (${message.author.id})`
+    );
+
     if (message.content) lines.push(message.content);
     if (message.embeds.length) lines.push("[Message contains an embed]");
 
@@ -78,14 +133,16 @@ async function createTranscript(channel) {
       lines.push(attachment.url);
     }
 
-    if (message.stickers.size) lines.push("[Message contains a sticker]");
+    if (message.stickers.size) {
+      lines.push("[Message contains a sticker]");
+    }
+
     lines.push("");
   }
 
   return Buffer.from(lines.join("\n"), "utf8");
 }
 
-// Ticket buttons
 function ticketButtons({ claimed = false, closed = false } = {}) {
   if (closed) {
     return new ActionRowBuilder().addComponents(
@@ -168,6 +225,7 @@ client.on("interactionCreate", async interaction => {
         await interaction.reply(response).catch(console.error);
       }
     }
+
     return;
   }
 
@@ -178,9 +236,10 @@ client.on("interactionCreate", async interaction => {
   ) {
     await interaction.deferReply({ ephemeral: true });
 
+    let ticketChannel;
+
     try {
-      const configs = getConfigs();
-      const config = configs[interaction.guild.id];
+      const config = await getGuildConfig(interaction.guild.id);
 
       if (!config) {
         return interaction.editReply(
@@ -191,7 +250,9 @@ client.on("interactionCreate", async interaction => {
       const staffRole = interaction.guild.roles.cache.get(config.staffRoleId);
 
       if (!staffRole) {
-        return interaction.editReply("The configured staff role no longer exists.");
+        return interaction.editReply(
+          "The configured staff role no longer exists."
+        );
       }
 
       const existingTicket = interaction.guild.channels.cache.find(channel =>
@@ -200,7 +261,9 @@ client.on("interactionCreate", async interaction => {
       );
 
       if (existingTicket) {
-        return interaction.editReply(`You already have a ticket: ${existingTicket}`);
+        return interaction.editReply(
+          `You already have a ticket: ${existingTicket}`
+        );
       }
 
       const categories = {
@@ -217,13 +280,20 @@ client.on("interactionCreate", async interaction => {
         return interaction.editReply("That ticket category is invalid.");
       }
 
-      const ticketChannel = await interaction.guild.channels.create({
-        name: `ticket-${interaction.user.username}`
-          .toLowerCase()
-          .replace(/[^a-z0-9-]/g, "-")
-          .slice(0, 90),
+      const ticketNumber = await allocateTicketNumber(interaction.guild.id);
+
+      const ticketName = `ticket-${String(ticketNumber).padStart(4, "0")}-${interaction.user.username}`
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .slice(0, 100);
+
+      ticketChannel = await interaction.guild.channels.create({
+        name: ticketName,
         type: ChannelType.GuildText,
-        topic: `Ticket owner: ${interaction.user.id} | Category: ${categoryName} | Original category: none`,
+        topic:
+          `Ticket owner: ${interaction.user.id} | ` +
+          `Ticket number: ${ticketNumber} | ` +
+          `Category: ${categoryName} | Original category: ${interaction.channel.parentId || "none"}`,
         permissionOverwrites: [
           {
             id: interaction.guild.roles.everyone.id,
@@ -257,11 +327,37 @@ client.on("interactionCreate", async interaction => {
         ]
       });
 
+      const ticketRecord = {
+        guildId: interaction.guild.id,
+        channelId: ticketChannel.id,
+        ticketNumber,
+        ownerId: interaction.user.id,
+        categoryKey: interaction.values[0],
+        categoryName,
+        staffRoleId: staffRole.id,
+        status: "open",
+        claimedBy: null,
+        closeReason: null,
+        closedBy: null,
+        originalParentId: interaction.channel.parentId || null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        closedAt: null,
+        reopenedAt: null
+      };
+
+      await saveNewTicket(
+        interaction.guild.id,
+        ticketChannel.id,
+        ticketRecord
+      );
+
       const ticketEmbed = new EmbedBuilder()
         .setColor(0x5865F2)
-        .setTitle("Tixora Support Ticket")
+        .setTitle(`Tixora Support Ticket #${String(ticketNumber).padStart(4, "0")}`)
         .setDescription(
           `Welcome ${interaction.user}!\n\n` +
+          `**Ticket Number:** #${String(ticketNumber).padStart(4, "0")}\n` +
           `**Category:** ${categoryName}\n` +
           `**Staff Team:** ${staffRole}\n\n` +
           "Please describe your issue. A staff member will assist you soon."
@@ -275,11 +371,18 @@ client.on("interactionCreate", async interaction => {
         components: [ticketButtons()]
       });
 
-      await interaction.editReply(`Your ticket has been created: ${ticketChannel}`);
+      await interaction.editReply(
+        `Your ticket #${String(ticketNumber).padStart(4, "0")} has been created: ${ticketChannel}`
+      );
     } catch (error) {
       console.error("TICKET CREATION ERROR:", error);
+
+      if (ticketChannel) {
+        await ticketChannel.delete("Ticket setup failed").catch(console.error);
+      }
+
       await interaction.editReply(
-        "Tixora couldn't create your ticket. Please check its server permissions."
+        "Tixora couldn't create your ticket. Please check its server permissions and storage files."
       ).catch(console.error);
     }
 
@@ -301,7 +404,7 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      const config = getConfigs()[interaction.guild.id];
+      const config = await getGuildConfig(interaction.guild.id);
       const staffRole = config
         ? interaction.guild.roles.cache.get(config.staffRoleId)
         : null;
@@ -322,7 +425,16 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      if (channel.topic.includes("Claimed by:")) {
+      const ticket = await getTicket(interaction.guild.id, channel.id);
+
+      if (ticket?.status === "closed") {
+        return interaction.reply({
+          content: "This ticket is closed. Reopen it before claiming it.",
+          ephemeral: true
+        });
+      }
+
+      if (ticket?.claimedBy || channel.topic.includes("Claimed by:")) {
         return interaction.reply({
           content: "This ticket has already been claimed.",
           ephemeral: true
@@ -332,6 +444,10 @@ client.on("interactionCreate", async interaction => {
       await channel.setTopic(
         `${channel.topic} | Claimed by: ${interaction.user.id}`
       );
+
+      await updateTicket(interaction.guild.id, channel.id, {
+        claimedBy: interaction.user.id
+      });
 
       await interaction.update({
         components: [ticketButtons({ claimed: true })]
@@ -369,7 +485,7 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      const config = getConfigs()[interaction.guild.id];
+      const config = await getGuildConfig(interaction.guild.id);
       const staffRole = config
         ? interaction.guild.roles.cache.get(config.staffRoleId)
         : null;
@@ -390,22 +506,22 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      const claimedMatch = channel.topic.match(/Claimed by: (\d+)/);
-
-      if (!claimedMatch) {
+      if (!channel.topic.includes("Claimed by:")) {
         return interaction.reply({
           content: "This ticket isn't currently claimed.",
           ephemeral: true
         });
       }
 
-      const previousClaimant = claimedMatch[1];
-
       const updatedTopic = channel.topic
         .replace(/\s*\|\s*Claimed by: \d+/g, "")
         .trim();
 
       await channel.setTopic(updatedTopic);
+
+      await updateTicket(interaction.guild.id, channel.id, {
+        claimedBy: null
+      });
 
       await interaction.update({
         components: [ticketButtons()]
@@ -428,7 +544,7 @@ client.on("interactionCreate", async interaction => {
     return;
   }
 
-  // Close ticket button: ask for a reason in a modal
+  // Close ticket button
   if (
     interaction.isButton() &&
     interaction.customId === "tixora_close_ticket"
@@ -445,10 +561,12 @@ client.on("interactionCreate", async interaction => {
     try {
       const ownerMatch = channel.topic.match(/Ticket owner: (\d+)/);
       const ownerId = ownerMatch ? ownerMatch[1] : null;
-      const config = getConfigs()[interaction.guild.id];
+
+      const config = await getGuildConfig(interaction.guild.id);
       const staffRole = config
         ? interaction.guild.roles.cache.get(config.staffRoleId)
         : null;
+
       const member = await interaction.guild.members.fetch(interaction.user.id);
       const isOwner = ownerId === interaction.user.id;
       const isStaff = Boolean(staffRole && member.roles.cache.has(staffRole.id));
@@ -456,6 +574,15 @@ client.on("interactionCreate", async interaction => {
       if (!isOwner && !isStaff) {
         return interaction.reply({
           content: "Only the ticket owner or support staff can close this ticket.",
+          ephemeral: true
+        });
+      }
+
+      const ticket = await getTicket(interaction.guild.id, channel.id);
+
+      if (ticket?.status === "closed") {
+        return interaction.reply({
+          content: "This ticket is already closed.",
           ephemeral: true
         });
       }
@@ -477,6 +604,7 @@ client.on("interactionCreate", async interaction => {
       await interaction.showModal(modal);
     } catch (error) {
       console.error("CLOSE REASON MODAL ERROR:", error);
+
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: "Tixora couldn't open the close form. Please try again.",
@@ -504,6 +632,7 @@ client.on("interactionCreate", async interaction => {
 
     try {
       const reason = interaction.fields.getTextInputValue("close_reason").trim();
+
       if (reason.length < 3) {
         return interaction.reply({
           content: "Please enter a close reason with at least 3 characters.",
@@ -513,10 +642,12 @@ client.on("interactionCreate", async interaction => {
 
       const ownerMatch = channel.topic.match(/Ticket owner: (\d+)/);
       const ownerId = ownerMatch ? ownerMatch[1] : null;
-      const config = getConfigs()[interaction.guild.id];
+
+      const config = await getGuildConfig(interaction.guild.id);
       const staffRole = config
         ? interaction.guild.roles.cache.get(config.staffRoleId)
         : null;
+
       const member = await interaction.guild.members.fetch(interaction.user.id);
       const isOwner = ownerId === interaction.user.id;
       const isStaff = Boolean(staffRole && member.roles.cache.has(staffRole.id));
@@ -524,6 +655,15 @@ client.on("interactionCreate", async interaction => {
       if (!ownerId || (!isOwner && !isStaff)) {
         return interaction.reply({
           content: "Only the ticket owner or support staff can close this ticket.",
+          ephemeral: true
+        });
+      }
+
+      const ticket = await getTicket(interaction.guild.id, channel.id);
+
+      if (ticket?.status === "closed") {
+        return interaction.reply({
+          content: "This ticket is already closed.",
           ephemeral: true
         });
       }
@@ -552,11 +692,11 @@ client.on("interactionCreate", async interaction => {
 
       await interaction.deferReply({ ephemeral: true });
 
+      const safeReason = reason.slice(0, 500);
+
       const topicWithoutOldReason = (channel.topic || "")
         .replace(/\s*\|\s*Close reason: [^|]*/g, "")
         .trim();
-
-      const safeReason = reason.slice(0, 500);
 
       await channel.setTopic(
         `${topicWithoutOldReason} | Close reason: ${safeReason}`.slice(0, 1024)
@@ -568,12 +708,15 @@ client.on("interactionCreate", async interaction => {
         name: `tixora-${channel.name}-${channel.id}.txt`
       });
 
+      const ticketNumber = ticket?.ticketNumber ?? "Unknown";
+
       const transcriptEmbed = new EmbedBuilder()
         .setColor(0x5865F2)
         .setTitle("Ticket Transcript")
         .setDescription(
           "A ticket has been closed and archived. Its transcript has been saved.\n\n" +
           `**Ticket:** #${channel.name}\n` +
+          `**Ticket Number:** #${ticketNumber}\n` +
           `**Closed by:** ${interaction.user}\n` +
           `**Ticket ID:** ${channel.id}\n` +
           `**Close reason:** ${safeReason}`
@@ -592,6 +735,13 @@ client.on("interactionCreate", async interaction => {
       });
 
       await channel.setParent(closedCategory.id);
+
+      await updateTicket(interaction.guild.id, channel.id, {
+        status: "closed",
+        closeReason: safeReason,
+        closedBy: interaction.user.id,
+        closedAt: new Date().toISOString()
+      });
 
       const recentMessages = await channel.messages.fetch({ limit: 50 });
 
@@ -634,7 +784,7 @@ client.on("interactionCreate", async interaction => {
     return;
   }
 
-  // Reopen archived ticket (staff only)
+  // Reopen archived ticket
   if (
     interaction.isButton() &&
     interaction.customId === "tixora_reopen_ticket"
@@ -649,7 +799,7 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      const config = getConfigs()[interaction.guild.id];
+      const config = await getGuildConfig(interaction.guild.id);
       const staffRole = config
         ? interaction.guild.roles.cache.get(config.staffRoleId)
         : null;
@@ -680,6 +830,15 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
+      const ticket = await getTicket(interaction.guild.id, channel.id);
+
+      if (ticket?.status !== "closed") {
+        return interaction.reply({
+          content: "This ticket is not currently marked as closed.",
+          ephemeral: true
+        });
+      }
+
       await interaction.deferReply({ ephemeral: true });
 
       await channel.permissionOverwrites.edit(ownerId, {
@@ -688,11 +847,15 @@ client.on("interactionCreate", async interaction => {
         ReadMessageHistory: true
       });
 
-      // Move the ticket out of Closed Tickets
-      await channel.setParent(null);
+      // Return the ticket to the category it was in before closing.
+      await channel.setParent(ticket.originalParentId || null);
 
-      const claimedMatch = channel.topic.match(/Claimed by: (\d+)/);
-      const claimed = Boolean(claimedMatch);
+      const claimed = Boolean(ticket.claimedBy);
+
+      await updateTicket(interaction.guild.id, channel.id, {
+        status: "open",
+        reopenedAt: new Date().toISOString()
+      });
 
       await interaction.message.edit({
         components: [ticketButtons({ claimed })]

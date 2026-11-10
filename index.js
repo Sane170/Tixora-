@@ -31,8 +31,6 @@ const client = new Client({
 
 client.commands = new Collection();
 
-// Serialize storage updates so simultaneous ticket actions
-// don't overwrite each other's changes.
 let storageQueue = Promise.resolve();
 
 async function updateData(name, updater) {
@@ -71,8 +69,7 @@ async function updateTicket(guildId, channelId, changes) {
 
 async function allocateTicketNumber(guildId) {
   return updateData("counters", counters => {
-    const current = Number(counters[guildId]) || 0;
-    const next = current + 1;
+    const next = (Number(counters[guildId]) || 0) + 1;
     counters[guildId] = next;
     return next;
   });
@@ -293,7 +290,7 @@ client.on("interactionCreate", async interaction => {
         topic:
           `Ticket owner: ${interaction.user.id} | ` +
           `Ticket number: ${ticketNumber} | ` +
-          `Category: ${categoryName} | Original category: ${interaction.channel.parentId || "none"}`,
+          `Category: ${categoryName} | Original category: none`,
         permissionOverwrites: [
           {
             id: interaction.guild.roles.everyone.id,
@@ -339,7 +336,7 @@ client.on("interactionCreate", async interaction => {
         claimedBy: null,
         closeReason: null,
         closedBy: null,
-        originalParentId: interaction.channel.parentId || null,
+        originalParentId: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         closedAt: null,
@@ -544,7 +541,7 @@ client.on("interactionCreate", async interaction => {
     return;
   }
 
-  // Close ticket button
+  // Close ticket button - show the modal immediately
   if (
     interaction.isButton() &&
     interaction.customId === "tixora_close_ticket"
@@ -558,59 +555,26 @@ client.on("interactionCreate", async interaction => {
       });
     }
 
+    const reasonInput = new TextInputBuilder()
+      .setCustomId("close_reason")
+      .setLabel("Why is this ticket being closed?")
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder("Briefly explain why this ticket is being closed...")
+      .setMinLength(3)
+      .setMaxLength(500)
+      .setRequired(true);
+
+    const modal = new ModalBuilder()
+      .setCustomId("tixora_close_reason_submit")
+      .setTitle("Close Support Ticket")
+      .addComponents(
+        new ActionRowBuilder().addComponents(reasonInput)
+      );
+
     try {
-      const ownerMatch = channel.topic.match(/Ticket owner: (\d+)/);
-      const ownerId = ownerMatch ? ownerMatch[1] : null;
-
-      const config = await getGuildConfig(interaction.guild.id);
-      const staffRole = config
-        ? interaction.guild.roles.cache.get(config.staffRoleId)
-        : null;
-
-      const member = await interaction.guild.members.fetch(interaction.user.id);
-      const isOwner = ownerId === interaction.user.id;
-      const isStaff = Boolean(staffRole && member.roles.cache.has(staffRole.id));
-
-      if (!isOwner && !isStaff) {
-        return interaction.reply({
-          content: "Only the ticket owner or support staff can close this ticket.",
-          ephemeral: true
-        });
-      }
-
-      const ticket = await getTicket(interaction.guild.id, channel.id);
-
-      if (ticket?.status === "closed") {
-        return interaction.reply({
-          content: "This ticket is already closed.",
-          ephemeral: true
-        });
-      }
-
-      const reasonInput = new TextInputBuilder()
-        .setCustomId("close_reason")
-        .setLabel("Why is this ticket being closed?")
-        .setStyle(TextInputStyle.Paragraph)
-        .setPlaceholder("Briefly explain why this ticket is being closed...")
-        .setMinLength(3)
-        .setMaxLength(500)
-        .setRequired(true);
-
-      const modal = new ModalBuilder()
-        .setCustomId("tixora_close_reason_submit")
-        .setTitle("Close Support Ticket")
-        .addComponents(new ActionRowBuilder().addComponents(reasonInput));
-
       await interaction.showModal(modal);
     } catch (error) {
-      console.error("CLOSE REASON MODAL ERROR:", error);
-
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: "Tixora couldn't open the close form. Please try again.",
-          ephemeral: true
-        }).catch(console.error);
-      }
+      console.error("CLOSE MODAL ERROR:", error);
     }
 
     return;
@@ -769,7 +733,7 @@ client.on("interactionCreate", async interaction => {
       console.error("TICKET CLOSE/ARCHIVE ERROR:", error);
 
       const message =
-        "Tixora couldn't finish archiving this ticket. Please check its permissions and try again.";
+        "Tixora couldn't finish archiving this ticket. Please check its permissions.";
 
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply(message).catch(console.error);
@@ -847,7 +811,6 @@ client.on("interactionCreate", async interaction => {
         ReadMessageHistory: true
       });
 
-      // Return the ticket to the category it was in before closing.
       await channel.setParent(ticket.originalParentId || null);
 
       const claimed = Boolean(ticket.claimedBy);
